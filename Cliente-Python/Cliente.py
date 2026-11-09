@@ -1,163 +1,83 @@
-import base64
-import queue
 import socket
 import threading
+import os
 
-IP_SERVIDOR = "127.0.0.1"
-NOME_CLIENTE = "Cliente-Python"   
+HOST = "127.0.0.1"
+PORT = 12354
 
-try:
-    sock = socket.create_connection((IP_SERVIDOR, 12345))
-    entrada = sock.makefile("r", encoding="utf-8")
-    saida = sock.makefile("w", encoding="utf-8")
-
-    status = entrada.readline().strip()
-    if status == "" or status.startswith("ERRO"):
-        print(status or "Servidor encerrou a conexao.")
-        sock.close()
-        raise SystemExit
-
-except (ConnectionError, OSError):
-    print("Servidor encerrou a conexao.")
-    raise SystemExit
-
-saida.write("NOME " + NOME_CLIENTE + "\n")
-saida.flush()
-
-resposta_nome = entrada.readline().strip()  
-meu_nome = resposta_nome[len("NOME_OK "):]
-print(f" Conectado ao servidor como: {meu_nome}")
-respostas = queue.Queue()
-
-def leitora():
-    try:
-        while True:
-            linha = entrada.readline()
-            if linha == "":
-                break
-            linha = linha.strip()
-            if linha.startswith("MSG "):
-                print()
-                print("Mensagem de " + linha[len("MSG "):])
-                print()
-            else:
-                respostas.put(linha)
-    except (ConnectionError, OSError, ValueError):
-        pass
-    finally:
-        respostas.put("CONEXAO ENCERRADA!")
+def formatar_mensagem(mensagem: str) -> str:
+    partes = mensagem.split("|", 2)
+    if len(partes) == 3 and partes[0] == "MSG":
+        return f"{partes[1]}: {partes[2]}"
+    if len(partes) >= 2 and partes[0] == "SERVIDOR":
+        return f"[Servidor] {partes[1]}"
+    return mensagem
 
 
-thread_leitora = threading.Thread(target=leitora, daemon=True)
-thread_leitora.start()
+saindo = threading.Event()
 
-try:
+
+def receber(sock: socket.socket):
+    buffer = ""
     while True:
-        print("")
-        print(f"Menu:")
-        print("1 - Divisao")
-        print("2 - Adicao")
-        print("3 - Subtracao")
-        print("4 - Pedir imagem ao servidor")
-        print("5 - Mandar mensagem para outro cliente")
-        print("0 - Encerrar")
-        print("")
-        opcao = input("Opcao: ")
-
-        if opcao in ("1", "2", "3"):
-            numero1 = input("Digite o primeiro numero: ").strip().replace(",", ".")
-            numero2 = input("Digite o segundo numero: ").strip().replace(",", ".")
-            mensagem = opcao + " " + numero1 + " " + numero2
-
-        elif opcao == "4":
-            mensagem = "4"
-
-        elif opcao == "5":
-            saida.write("5\n")
-            saida.flush()
-            lista = respostas.get()  
-            if not lista.startswith("OK:"):
-                print("Servidor encerrou a conexao.")
-                break
-            texto = lista[3:].strip()
-            if texto == "":
-                print("Nenhum outro cliente conectado.")
-                print()
-                continue
-
-            nomes = texto.split(", ")
-            print("Clientes conectados:")
-            for i, nome in enumerate(nomes, 1):
-                print(f"{i} - {nome}")
-            print("0 - Voltar")
-            escolha = input("Destinatario: ").strip()
-            if escolha == "0":
-                print()
-                continue
-            if not escolha.isdigit() or not (1 <= int(escolha) <= len(nomes)):
-                print("Opcao invalida.")
-                print()
-                continue
-            destino = nomes[int(escolha) - 1]
-
-            conteudo = input(f"Mensagem para {destino}: ").strip()
-            if conteudo == "":
-                print("Mensagem vazia, nada enviado.")
-                print()
-                continue
-            mensagem = "5 " + destino + " " + conteudo
-
-        elif opcao == "0":
-            saida.write("0\n")
-            saida.flush()
+        try:
+            dados = sock.recv(4096)
+        except OSError:
+            break
+        if not dados:
             break
 
-        else:
-            print("Opcao invalida.")
-            print()
-            continue
+        buffer += dados.decode("utf-8", errors="replace")
+        while "\n" in buffer:
+            linha, buffer = buffer.split("\n", 1)
+            linha = linha.strip()
+            if linha:
+                print("\r" + formatar_mensagem(linha), flush=True)
+                print("> ", end="", flush=True)
 
-        saida.write(mensagem + "\n")
-        saida.flush()
-        resposta = respostas.get()
+    if saindo.is_set():
+        return
+    print("Conexao encerrada pelo servidor.", flush=True)
+    os._exit(0)  
 
-        if resposta == "CONEXAO ENCERRADA!":
-            print("Servidor encerrou a conexao.")
-            break
 
-        if opcao == "4" and not resposta.startswith("ERRO"):
-            with open("carameloPedreiro.jpg", "wb") as arquivo:
-                arquivo.write(base64.b64decode(resposta))
-            print("Imagem recebida!")
-
-        elif opcao == "5":
-            if resposta.startswith("OK:"):
-                print("Mensagem enviada.")
-            else:
-                print(resposta)
-
-        else:
-            print("Resultado:", resposta)
-
-except KeyboardInterrupt:
-    print("\nCONEXAO ENCERRADA!")
-
-except (ConnectionError, OSError):
-    print("Servidor desconectado. Conexao encerrada.")
-
-finally:
+def main():
+    print(f"Conectando em {HOST}:{PORT} ...", flush=True)
     try:
-        sock.shutdown(socket.SHUT_RDWR)
-    except OSError:
-        pass
+        sock = socket.create_connection((HOST, PORT), timeout=5)
+        sock.settimeout(None)
+    except OSError as e:
+        print(f"Nao foi possivel conectar ao servidor {HOST}:{PORT}: {e}")
+        return
 
-    thread_leitora.join(timeout=1)
-    try:
-        saida.close()
-    except OSError:
-        pass
-    try:
-        entrada.close()
-    except OSError:
-        pass
-    sock.close()
+    os.system("") 
+
+    with sock:
+        print("")
+        nome = input("Digite seu nome: ").strip()
+        while not nome:
+            nome = input("Nome invalido. Digite seu nome: ").strip()
+
+        threading.Thread(target=receber, args=(sock,), daemon=True).start()
+
+        print("Conectado ao servidor. Digite sua mensagem e 'SAIR' para encerrar.", flush=True)
+        print("")
+        sock.sendall(f"JOIN:{nome}\n".encode("utf-8"))
+
+        try:
+            while True:
+                texto = input("> ").strip()
+                print("\033[A\r\033[K", end="", flush=True)
+                if texto.upper() == "SAIR":
+                    saindo.set()
+                    sock.sendall(b"QUIT\n")
+                    break
+                if texto:
+                    sock.sendall(f"MSG:{texto}\n".encode("utf-8"))
+                    print(f"eu: {texto}", flush=True)
+        except (KeyboardInterrupt, EOFError):
+            saindo.set()
+
+
+if __name__ == "__main__":
+    main()
